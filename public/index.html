@@ -258,7 +258,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;b
 <body>
 
 <!-- ── Auth screen ── -->
-<div id="auth-screen">
+<div id="auth-screen" style="display:none">
   <div class="auth-box">
     <div class="auth-logo">
       <div class="auth-ico">✝</div>
@@ -562,12 +562,25 @@ function toast(msg, ms=2500) {
 let isFirstRun = false
 
 async function initAuth() {
+  // Login desativado temporariamente — acesso direto
+  try {
+    const res = await api('GET', '/auth/autologin')
+    if (res && res.token) {
+      token = res.token
+      currentUser = { username: res.username, name: res.name, role: res.role }
+      sessionStorage.setItem('church_token', token)
+      sessionStorage.setItem('church_user', JSON.stringify(currentUser))
+      await showApp()
+      return
+    }
+  } catch(e) { console.error('Auto-login failed:', e) }
+  // Fallback: show normal login
   const status = await api('GET', '/auth/status')
   isFirstRun = status.setup
   if (isFirstRun) {
     document.getElementById('auth-sub').textContent = 'Configure o primeiro administrador'
     document.getElementById('auth-tabs').style.display = 'none'
-    document.getElementById('auth-info').textContent = 'Esta é a configuração inicial do sistema. Crie o usuário administrador.'
+    document.getElementById('auth-info').textContent = 'Esta é a configuração inicial do sistema.'
     setAuthTab('register')
   } else if (token && currentUser) {
     showApp()
