@@ -262,6 +262,102 @@ app.put('/api/users/:id/sectors', auth, adminOnly, (req, res) => {
   res.json({ok: true})
 })
 
+
+// ── Backup automático (a cada 1 hora) ────────────────────────────────────
+const fs = require('fs')
+
+function runBackup() {
+  try {
+    const dbPath = process.env.DB_PATH || 'igreja.db'
+    if (!fs.existsSync(dbPath)) return
+
+    // Gera o seed JSON com o estado atual do banco
+    const txs = db.prepare('SELECT * FROM transactions ORDER BY rowid').all().map(r => ({
+      tipo: r.tipo, desc: r.descr, val: r.val, cat: r.cat, dat: r.dat,
+      obs: r.obs, setor: r.setor, status: r.status, datPag: r.datPag,
+      valPag: r.valPag, grupoId: r.grupoId, parcela: r.parcela
+    }))
+
+    const cfgRows = db.prepare('SELECT key, value FROM config').all()
+    const cfg = {}
+    cfgRows.forEach(r => { try { cfg[r.key] = JSON.parse(r.value) } catch { cfg[r.key] = r.value } })
+
+    const backup = {
+      timestamp: new Date().toISOString(),
+      txs,
+      cats: cfg.cats || {},
+      setores: cfg.setores || [],
+      meta: cfg.meta || { entrada: 0, saida: 0 }
+    }
+
+    // Mantém os 24 backups mais recentes (24h de histórico)
+    const backupDir = process.env.BACKUP_DIR || '.'
+    if (!fs.existsSync(backupDir)) fs.mkdirSync(backupDir, { recursive: true })
+
+    const filename = `backup_${new Date().toISOString().replace(/[:.]/g,'-').slice(0,19)}.json`
+    const filepath = require('path').join(backupDir, filename)
+    fs.writeFileSync(filepath, JSON.stringify(backup, null, 2), 'utf-8')
+
+    // Remove backups antigos (mantém só os 24 mais recentes)
+    const files = fs.readdirSync(backupDir)
+      .filter(f => f.startsWith('backup_') && f.endsWith('.json'))
+      .sort()
+    if (files.length > 24) {
+      files.slice(0, files.length - 24).forEach(f => {
+        fs.unlinkSync(require('path').join(backupDir, f))
+      })
+    }
+
+    console.log(`[backup] ${filename} salvo — ${txs.length} transacoes`)
+  } catch (err) {
+    console.error('[backup] Erro:', err.message)
+  }
+}
+
+// Roda imediatamente na inicialização e depois a cada 1 hora
+runBackup()
+setInterval(runBackup, 60 * 60 * 1000)
+
+// ── Rotas de backup (download via navegador) ──────────────────────────────
+app.get('/api/backup/download', auth, adminOnly, (req, res) => {
+  try {
+    const txs = db.prepare('SELECT * FROM transactions ORDER BY rowid').all().map(r => ({
+      tipo: r.tipo, desc: r.descr, val: r.val, cat: r.cat, dat: r.dat,
+      obs: r.obs, setor: r.setor, status: r.status, datPag: r.datPag,
+      valPag: r.valPag, grupoId: r.grupoId, parcela: r.parcela
+    }))
+    const cfgRows = db.prepare('SELECT key, value FROM config').all()
+    const cfg = {}
+    cfgRows.forEach(r => { try { cfg[r.key] = JSON.parse(r.value) } catch { cfg[r.key] = r.value } })
+    const backup = {
+      timestamp: new Date().toISOString(), txs,
+      cats: cfg.cats || {}, setores: cfg.setores || [],
+      meta: cfg.meta || { entrada: 0, saida: 0 }
+    }
+    const filename = `backup_igreja_${new Date().toISOString().slice(0,10)}.json`
+    res.setHeader('Content-Disposition', `attachment; filename="${filename}"`)
+    res.setHeader('Content-Type', 'application/json')
+    res.json(backup)
+  } catch (err) {
+    res.status(500).json({ error: err.message })
+  }
+})
+
+app.get('/api/backup/list', auth, adminOnly, (req, res) => {
+  try {
+    const backupDir = process.env.BACKUP_DIR || '.'
+    const files = fs.existsSync(backupDir)
+      ? fs.readdirSync(backupDir).filter(f => f.startsWith('backup_') && f.endsWith('.json')).sort().reverse()
+      : []
+    res.json(files.map(f => {
+      const stat = fs.statSync(require('path').join(backupDir, f))
+      return { name: f, size: stat.size, date: stat.mtime }
+    }))
+  } catch (err) {
+    res.status(500).json({ error: err.message })
+  }
+})
+
 // ── Start ─────────────────────────────────────────────────────────────────
 app.listen(PORT, '0.0.0.0', () => {
   console.log(`\n  Financeiro da Igreja`)
